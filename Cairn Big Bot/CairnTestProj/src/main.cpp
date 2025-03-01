@@ -4,21 +4,28 @@
 
 /*  Optical Sensor Declaration : the number is the port it's plugged into
     This is the color sensor and will be used to detect the opponent's rings so they can be thrown out of the bot */
-pros::Optical optical_sensor(15);
+pros::Optical optical_sensor(21);
 
-/*  Potentiometer Declarations: these will be used to keep track of the actual position of each drive train,
-    as well as the lift */
-pros::ADIAnalogIn pot1('G');
-pros::Motor testMotor(16);
+pros::Motor elevatorMotor1(10, pros::v5::MotorGears::blue);
+pros::Motor intakeMotor(16);
+char teamColor = 'n';
+
+/*  Odometry Sensor Declarations */
+pros::Rotation leftWheelRot(15);
+pros::Rotation rightWheelRot(17);
+pros::Rotation horizWheelRot(15);
+pros::IMU IMU(14);
+lemlib::TrackingWheel VertTrackingWheelLeft(&leftWheelRot, lemlib::Omniwheel::OLD_325, 1);
+lemlib::TrackingWheel VertTrackingWheelRight(&rightWheelRot, lemlib::Omniwheel::OLD_325, 1);
+lemlib::TrackingWheel horiTrackWheel(&horizWheelRot, lemlib::Omniwheel::NEW_275_HALF, 1);
 
 /*  Solenoid Declarations: pneumatic component control */
 pros::ADIDigitalOut sol1 ('G', LOW);
 
 /*	Motor Group Declaration : the number are the ports they are in, and the minus '-' means they are reversed
 	Typically only the right side needs to be reversed */
-pros::MotorGroup left_motor_group({ 11, 12 });
-pros::MotorGroup right_motor_group({ -19, -20 });
-bool reversed = false;
+pros::MotorGroup left_motor_group({ 18, 19, -20 });
+pros::MotorGroup right_motor_group({ 13, -12, 11 });
 
 /*  Controller declaration, it's almost always this exact line of code but is still needed
     Note that if you want to use two controllers, you need to declare a second controller with a differend name */
@@ -31,11 +38,77 @@ pros::Controller controller(pros::E_CONTROLLER_MASTER);
 */
 lemlib::Drivetrain drivetrain(&left_motor_group, // left motor group
                               &right_motor_group, // right motor group
-                              10, // 10 inch track width
-                              lemlib::Omniwheel::NEW_4, // using new 4" omnis
-                              360, // drivetrain rpm is 360
+                              9, // 9 inch track width
+                              lemlib::Omniwheel::OLD_325, // using new 4" omnis
+                              200, // drivetrain rpm is 200
                               2 // horizontal drift is 2 (for now)
 );
+
+// auton functions
+void autoMove(int velocity, int delayms) {
+    left_motor_group.move_velocity(velocity);
+    right_motor_group.move_velocity(velocity);
+    pros::delay(delayms);
+    left_motor_group.brake();
+    right_motor_group.brake();
+    pros::delay(100);
+}
+
+void autoTurn(int velocity, int heading, bool turnLeft) {
+    
+    switch(turnLeft) {
+        case true:
+            while(IMU.get_heading() > heading) {
+                left_motor_group.move_velocity(-velocity);
+                right_motor_group.move_velocity(velocity);
+                std::string IMUstr = std::to_string(IMU.get_heading());
+                controller.set_text(0, 0, IMUstr);
+            }            
+            break;
+        case false:
+            while(IMU.get_heading() < heading) {
+                left_motor_group.move_velocity(velocity);
+                right_motor_group.move_velocity(-velocity);
+                std::string IMUstr = std::to_string(IMU.get_heading());
+                controller.set_text(0, 0, IMUstr);
+            }
+            break;
+        default:
+            break;
+    }
+    left_motor_group.brake();
+    right_motor_group.brake();
+    pros::delay(100);
+}
+
+void autoPneumatics(bool signal) {
+    switch (signal)
+    {
+    case true:
+        sol1.set_value(LOW);
+        pros::delay(100);
+        break;
+    case false:
+        sol1.set_value(HIGH);
+        pros::delay(100);
+        break;
+    default:
+        break;
+    }
+}
+
+void autoMoveAndGrab(int velocity, int delayms, int grabDelay) {
+    int finalMoveDelay = delayms-grabDelay;
+
+    left_motor_group.move_velocity(velocity);
+    right_motor_group.move_velocity(velocity);
+    pros::delay(grabDelay);
+    autoPneumatics(true);
+    pros::delay(finalMoveDelay);
+    left_motor_group.brake();
+    right_motor_group.brake();
+    pros::delay(100);
+}
 
 /*  lateral PID controller
      don't worry about tuning this yet, if you want more info check the lemlib or PROS docs for PID related info */
@@ -67,34 +140,16 @@ lemlib::ControllerSettings angular_controller(2, // proportional gain (kP)
     all null for now since we have no sensors, if you want more info on Odom check the lemlib or PROS docs for any
     odom related articles or docs
 */
-lemlib::OdomSensors sensors(nullptr, // vertical tracking wheel 1, set to null
-                            nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
-                            nullptr, // horizontal tracking wheel 1
-                            nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
-                            nullptr // inertial sensor
+lemlib::OdomSensors sensors(&VertTrackingWheelLeft, // left vertical tracking wheel
+                            &VertTrackingWheelRight, // right vertical tracking wheel
+                            &horiTrackWheel, // horizontal tracking wheel
+                            nullptr, // horizontal tracking wheel 2, set to nullptr bc we don't have a second one
+                            &IMU // inertial sensor
 );
 
 /*  Chassis Declaration
     sum of the drive train, PID controllers, and odom sensor array*/
 lemlib::Chassis chassis(drivetrain, lateral_controller, angular_controller, sensors);
-
-
-
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-void on_center_button() {
-	static bool pressed = false;
-	pressed = !pressed;
-	if (pressed) {
-		pros::lcd::set_text(2, "I was pressed!");
-	} else {
-		pros::lcd::clear_line(2);
-	}
-}
 
 /**
  * Runs initialization code. This occurs as soon as the program is started.
@@ -105,11 +160,7 @@ void on_center_button() {
 void initialize() {
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
-
-    pot1.calibrate();
-    testMotor.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-
-	pros::lcd::register_btn1_cb(on_center_button);
+    optical_sensor.set_led_pwm(100);
 }
 
 /**
@@ -141,7 +192,14 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+void autonomous() {
+    // pros::delay(100);
+    // autoMove(-600, 1000);
+    // autoPneumatics(true);
+    // autoTurn(300, 500, false);
+
+    // autoMoveAndGrab(600, 1500, 750);
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -158,49 +216,88 @@ void autonomous() {}
  */
 void opcontrol() {
 	while (true) {
-		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
+		pros::lcd::print(5, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
-        
+
         int leftY;
         int rightY;
         int leftX;
         int rightX;
 
-        if(controller.get_digital(DIGITAL_R1)) {
-            reversed = !reversed;
-        }
+        leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+        rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
+        leftX = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
+        rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
 
-        if(reversed) {
-            leftY = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y));
-            rightY = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y));
-            leftX = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X));
-            rightX = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X));
+        // pros::lcd::print(0, "%f", chassis.getPose().x);
+        // pros::lcd::print(1, "%f", chassis.getPose().y);
+        // pros::lcd::print(2, "%f", chassis.getPose().theta);
+        pros::lcd::print(3, "%f", IMU.get_heading());
+        pros::lcd::print(4, "%f", IMU.get_accel());
+        pros::lcd::print(0, "%c", teamColor);
+
+        if(controller.get_digital(DIGITAL_L1)) {
+            elevatorMotor1.move(-127);
+            intakeMotor.move(-127);
+        } else if(controller.get_digital(DIGITAL_L2)) {
+            elevatorMotor1.move(127);
+            intakeMotor.move(127);
         } else {
-            leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
-            rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
-            leftX = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
-            rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+            elevatorMotor1.brake();
+            intakeMotor.brake();
         }
 
-        /*  Below are some common control schemes for the robot, make sure all but one of these
-            lines starting in 'chassis.' are commented out
-            
-            feel free to uncomment and recomment some to try different control schemes
-            you can also look up different control schemes to see what they look like
-        */
+        // below is experimentation with the optical sensor
+        int detectedColor = optical_sensor.get_hue();
+        std::string redOrBlue = "";
+        pros::lcd::print(6, "Optical Sensor Hue: %d", detectedColor);
 
-        if(controller.get_digital(DIGITAL_UP)) {
-            sol1.set_value(HIGH);
-        } else if(controller.get_digital(DIGITAL_DOWN)) {
-            sol1.set_value(LOW);
+        switch(teamColor) {
+            case 'r': // red team
+                if(detectedColor > 170 && detectedColor < 210) {
+                    pros::lcd::print(7, "Blue detected");
+                    elevatorMotor1.move_relative(500, 600);
+                    pros::delay(250);
+                    elevatorMotor1.move_relative(-50, 600);
+                }
+                pros::lcd::print(1, "Red Team Selected");
+                break;
+            case 'b': // blue team
+                if(detectedColor > 0 && detectedColor < 20) {
+                    pros::lcd::print(7, "Red detected");
+                    elevatorMotor1.move_relative(500, 600);
+                    pros::delay(250);
+                    elevatorMotor1.move_relative(-50, 600);
+                }
+                pros::lcd::print(1, "Blue Team Selected");
+                break;
+            default: // not selected/disabled
+                pros::lcd::clear_line(7);
+                pros::lcd::print(1, "No Team Selected");
+                break;
         }
         
         // Tank Control
-        chassis.tank(leftY, rightY);
+        // chassis.tank(leftY, rightY);
 
         // Split Arcade/Drone Control
-        // chassis.arcade(leftY, rightX);
+        chassis.arcade(leftY, rightX);
+
+        // pneumatic control
+        if(controller.get_digital(DIGITAL_DOWN)) {
+            sol1.set_value(LOW);
+        } else if(controller.get_digital(DIGITAL_UP)) {
+            sol1.set_value(HIGH);
+        }
+
+        if(controller.get_digital(DIGITAL_A)) {
+            teamColor = 'r';
+        } else if(controller.get_digital(DIGITAL_B)) {
+            teamColor = 'b';
+        } else if(controller.get_digital(DIGITAL_X)) {
+            teamColor = 'n';
+        }
 
 		pros::delay(20);
 	}
