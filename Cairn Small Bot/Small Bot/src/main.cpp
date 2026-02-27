@@ -1,9 +1,26 @@
 //Includes
 #include "main.h"
 #include "lemlib/api.hpp"
+
+/*  Optical Sensor Declaration : the number is the port it's plugged into
+    This is the color sensor and will be used to detect the opponent's rings so they can be thrown out of the bot */
+pros::Optical optical_sensor(15);
+
+/*  Potentiometer Declarations: these will be used to keep track of the actual position of each drive train,
+    as well as the lift */
+pros::ADIAnalogIn pot1('G');
+pros::Motor testMotor(16);
+
+/*  Solenoid Declarations: pneumatic component control */
+pros::ADIDigitalOut sol1 ('G', LOW);
+
+/*	Motor Group Declaration : the number are the ports they are in, and the minus '-' means they are reversed
 #include <atomic>
 /*	Motor Group Declaration : the number are the ports they are in, and the '-' means they are reversed
 	Typically only the right side needs to be reversed */
+pros::MotorGroup left_motor_group({ 11, 12 });
+pros::MotorGroup right_motor_group({ -19, -20 });
+bool reversed = false;
 // pros::Motor front_left_motor(18, pros::E_MOTOR_GEAR_GREEN); // green cartridge
 // pros::Motor middle_left_motor(-19, pros::E_MOTOR_GEAR_GREEN); // green cartridge
 // pros::Motor bottom_left_motor(-20, pros::E_MOTOR_GEAR_GREEN); // green cartridge
@@ -111,6 +128,9 @@ void initialize() {
 	pros::lcd::initialize();
 	pros::lcd::set_text(1, "Hello PROS User!");
 
+    pot1.calibrate();
+    testMotor.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+
 	pros::lcd::register_btn1_cb(on_center_button);
 }
 
@@ -183,6 +203,40 @@ void opcontrol() {
 		pros::lcd::print(0, "%d %d %d", (pros::lcd::read_buttons() & LCD_BTN_LEFT) >> 2,
 		                 (pros::lcd::read_buttons() & LCD_BTN_CENTER) >> 1,
 		                 (pros::lcd::read_buttons() & LCD_BTN_RIGHT) >> 0);  // Prints status of the emulated screen LCDs
+        
+        int leftY;
+        int rightY;
+        int leftX;
+        int rightX;
+
+        if(controller.get_digital(DIGITAL_R1)) {
+            reversed = !reversed;
+        }
+
+        if(reversed) {
+            leftY = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y));
+            rightY = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y));
+            leftX = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X));
+            rightX = -(controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X));
+        } else {
+            leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+            rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
+            leftX = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
+            rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+        }
+
+        /*  Below are some common control schemes for the robot, make sure all but one of these
+            lines starting in 'chassis.' are commented out
+            
+            feel free to uncomment and recomment some to try different control schemes
+            you can also look up different control schemes to see what they look like
+        */
+
+        if(controller.get_digital(DIGITAL_UP)) {
+            sol1.set_value(HIGH);
+        } else if(controller.get_digital(DIGITAL_DOWN)) {
+            sol1.set_value(LOW);
+        }
 
 		// get controller analog positions used for the control schemes below
         int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
@@ -191,10 +245,10 @@ void opcontrol() {
         int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
         
         // Tank Control
-        // chassis.tank(leftY, rightY);
+        chassis.tank(leftY, rightY);
 
         // Split Arcade/Drone Control
-        chassis.arcade(leftY, rightX);
+        // chassis.arcade(leftY, rightX);
 
         // Intake controls: run motor on port 4 while R1/R2 is held.
         // R1 -> intake in (127), R2 -> out (-127). Stops otherwise.
