@@ -1,27 +1,45 @@
 //Includes
 #include "main.h"
 #include "lemlib/api.hpp"
-
+#include <atomic>
 /*	Motor Group Declaration : the number are the ports they are in, and the '-' means they are reversed
 	Typically only the right side needs to be reversed */
-pros::MotorGroup left_motor_group({ 19, 20 });
-pros::MotorGroup right_motor_group({ -12, -11 });
+// pros::Motor front_left_motor(18, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+// pros::Motor middle_left_motor(-19, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+// pros::Motor bottom_left_motor(-20, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+
+// pros::Motor front_right_motor(-8, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+// pros::Motor middle_right_motor(10, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+// pros::Motor bottom_right_motor(9, pros::E_MOTOR_GEAR_GREEN); // green cartridge
+
+pros::MotorGroup left_motor({-18, 19, 20});
+pros::MotorGroup right_motor({8, -7, -9});
 
 /*  Controller declaration, it's almost always this exact line of code but is still needed
     Note that if you want to use two controllers, you need to declare a second controller with a differend name */
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
 
+// Intake motor on port 4. Change port number if your motor is wired elsewhere.
+pros::Motor intake_motor(-1);
+pros::Motor conveyor(-11);
+pros::Motor top_wheel(6);
+pros::Motor descorer(16);
+pros::Imu imu(4);
+
+pros::MotorGroup intake({-1, -11}); // group of all drive motors for easy control
+static std::atomic_bool autonRunning = false; 
 /*  Drive Train is the sum of the two motor groups, their track width, 
     the type and size of wheels used, the rpm of the drive train, and the horizontal drift
     If any of the above needs further defining check the lemlib docs here: 
         https://lemlib.readthedocs.io/en/v0.5.0/tutorials/2_configuration.html
 */
-lemlib::Drivetrain drivetrain(&left_motor_group, // left motor group
-                              &right_motor_group, // right motor group
-                              10, // 10 inch track width
-                              lemlib::Omniwheel::NEW_4, // using new 4" omnis
-                              360, // drivetrain rpm is 360
-                              2 // horizontal drift is 2 (for now)
+lemlib::Drivetrain drivetrain(
+    &left_motor,   // pointer to left motor
+    &right_motor,  // pointer to right motor 
+    16,            // 16 inch track width
+    lemlib::Omniwheel::NEW_4, // using new 4" omnis
+    360,           // drivetrain rpm is 360
+    2              // horizontal drift is 2 (for now)
 );
 
 /*  lateral PID controller
@@ -58,7 +76,7 @@ lemlib::OdomSensors sensors(nullptr, // vertical tracking wheel 1, set to null
                             nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
                             nullptr, // horizontal tracking wheel 1
                             nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
-                            nullptr // inertial sensor
+                            &imu // inertial sensor
 );
 
 /*  Chassis Declaration
@@ -125,7 +143,27 @@ void competition_initialize() {}
  * will be stopped. Re-enabling the robot will restart the task, not re-start it
  * from where it left off.
  */
-void autonomous() {}
+void autonomous() {
+    chassis.setPose(0,0,0);
+    // intake.move(127);
+    // chassis.moveToPoint(5, 70, 3000);
+    // intake.move(0);
+    // chassis.moveToPoint(5, 120, 2000);
+    // chassis.moveToPose(15, 100, 0, 3000, {.forwards=false});
+    // intake.move(127);
+    // top_wheel.move(-127);
+    // pros::delay(3000);
+    // intake.move(0);
+    // top_wheel.move(0);
+
+    chassis.moveToPose(70, 20, 90, 3000);
+    // intake.move(127);
+    // pros::delay(2000);
+    // intake.move(0);
+    // chassis.moveToPose(10, 10, 0, 3000, {.forwards=false});
+    // chassis.moveToPose(-100, 10, 270, 4000);
+
+}
 
 /**
  * Runs the operator control code. This function will be started in its own task
@@ -151,13 +189,6 @@ void opcontrol() {
         int rightY = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_Y);
         int leftX = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_X);
         int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
-
-        /*  Below are some common control schemes for the robot, make sure all but one of these
-            lines starting in 'chassis.' are commented out
-            
-            feel free to uncomment and recomment some to try different control schemes
-            you can also look up different control schemes to see what they look like
-        */
         
         // Tank Control
         // chassis.tank(leftY, rightY);
@@ -165,6 +196,49 @@ void opcontrol() {
         // Split Arcade/Drone Control
         chassis.arcade(leftY, rightX);
 
+        // Intake controls: run motor on port 4 while R1/R2 is held.
+        // R1 -> intake in (127), R2 -> out (-127). Stops otherwise.
+        if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R1)) {
+            intake_motor.move(127);
+            conveyor.move(127);
+        } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)) {
+            intake_motor.move(-127);
+            conveyor.move(-127);
+        } else {
+            intake_motor.move(0);
+            conveyor.move(0);
+        }
+
+        if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1)) {
+            top_wheel.move(127);
+        } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2)) {
+            top_wheel.move(-127);
+        } else {
+            top_wheel.move(0);
+        }
+
+        if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP)) {
+            descorer.move_absolute(0, 127);
+        } else if (controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)) {
+            descorer.move_absolute(-200, -127);
+        } else {
+            descorer.move(0);
+        }
+
+        // start auton on X button (new-press)
+        if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X) && !autonRunning.load()) {
+            autonRunning.store(true);
+            pros::Task autonTask([&]() {
+                autonomous();
+                autonRunning.store(false);
+            });
+        }
+        // cancel auton with B (example)
+        if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B) && autonRunning.load()) {
+            chassis.cancelMotion();    // stop motion controller movements
+            // if your auton uses other blocking/waiting code, add cancellation checks there
+            autonRunning.store(false);
+        }
 		pros::delay(20);
 	}
 }
